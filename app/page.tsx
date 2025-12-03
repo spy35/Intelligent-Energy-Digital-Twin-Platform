@@ -1,599 +1,255 @@
-"use client"
+"use client";
 
-import { useEffect, useState, useCallback, useRef } from "react"
-import Link from "next/link"
-import { ArrowDown, ArrowUp, Search, RefreshCw } from "lucide-react"
-import { formatKoreanCurrency, formatUSDCurrency } from "@/lib/yahoo-finance"
-
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardFooter } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { Progress } from "@/components/ui/progress"
+import { useEffect, useState, useRef } from "react";
+import Link from "next/link";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { useToast } from "@/hooks/use-toast";
 import {
-  Pagination,
-  PaginationContent,
-  PaginationEllipsis,
-  PaginationItem,
-  PaginationLink,
-  PaginationNext,
-  PaginationPrevious,
-} from "@/components/ui/pagination"
+  Activity, Droplets, Thermometer, Zap, AlertTriangle, CheckCircle2, Bell, BarChart3, Camera, Users, Leaf, Timer
+} from "lucide-react";
 
-interface Stock {
-  symbol: string
-  shortName: string
-  longName: string
-  regularMarketPrice: number
-  regularMarketChange: number
-  regularMarketChangePercent: number
-  regularMarketVolume: number
-  isKoreanStock?: boolean
-  regularMarketTime?: number
+// 센서 데이터 타입
+interface SensorData {
+  temperature?: number;
+  humidity?: number;
+  motion?: number; 
+  current?: number;
+  power?: number;
+  people_count?: number;
+  system_mode?: string;    // ACTIVE, HOLD, ECO
+  system_message?: string; // 안내 메시지
+  alert_level?: "normal" | "warning" | "critical";
+  error?: string;
 }
 
-interface ChartDataPoint {
-  date: string
-  time: string
-  price: number
-  volume: number
+interface AlertLog {
+  id: number;
+  type: string;
+  message: string;
+  timestamp: string;
 }
 
-interface StockChartData {
-  symbol: string
-  chartData: ChartDataPoint[]
-  latestPrice: number
-  priceChange: number
-  percentChange: number
-  isKoreanStock: boolean
-  error?: string
-}
+export default function Dashboard() {
+  const [data, setData] = useState<SensorData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [alerts, setAlerts] = useState<AlertLog[]>([]);
+  const lastAlertTime = useRef<{ [key: string]: number }>({});
+  const { toast } = useToast();
 
-interface PaginationData {
-  page: number
-  pageSize: number
-  totalItems: number
-  totalPages: number
-}
-
-// 배열을 지정된 크기의 청크로 나누는 유틸리티 함수
-function chunkArray<T>(array: T[], chunkSize: number): T[][] {
-  const chunks: T[][] = []
-  for (let i = 0; i < array.length; i += chunkSize) {
-    chunks.push(array.slice(i, i + chunkSize))
-  }
-  return chunks
-}
-
-// 페이지네이션 관련 상수
-const ITEMS_PER_PAGE = 20
-
-export default function HomePage() {
-  const [searchTerm, setSearchTerm] = useState("")
-  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("")
-  const [stocks, setStocks] = useState<Stock[]>([])
-  const [stockCharts, setStockCharts] = useState<Record<string, StockChartData>>({})
-  const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [lastUpdated, setLastUpdated] = useState<Date>(new Date())
-  const refreshIntervalRef = useRef<NodeJS.Timeout | null>(null)
-  const [autoRefresh, setAutoRefresh] = useState(true)
-  const [refreshInterval, setRefreshInterval] = useState(60000) // 1분
-  const [refreshProgress, setRefreshProgress] = useState(0)
-  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-
-  // 페이지네이션 상태
-  const [currentPage, setCurrentPage] = useState(1)
-  const [pagination, setPagination] = useState<PaginationData>({
-    page: 1,
-    pageSize: ITEMS_PER_PAGE,
-    totalItems: 0,
-    totalPages: 1,
-  })
-
-  // 검색어 디바운싱
-  useEffect(() => {
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current)
-    }
-
-    searchTimeoutRef.current = setTimeout(() => {
-      setDebouncedSearchTerm(searchTerm)
-      // 검색어 변경 시 첫 페이지로 리셋
-      setCurrentPage(1)
-    }, 300)
-
-    return () => {
-      if (searchTimeoutRef.current) {
-        clearTimeout(searchTimeoutRef.current)
-      }
-    }
-  }, [searchTerm])
-
-  // 주식 데이터 가져오기 함수
-  const fetchStocks = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-
+  const fetchSensorData = async () => {
     try {
-      // Encode the search term to handle Korean characters properly
-      const encodedSearchTerm = encodeURIComponent(debouncedSearchTerm)
-      const response = await fetch(
-        `/api/stocks?page=${currentPage}&pageSize=${ITEMS_PER_PAGE}${debouncedSearchTerm ? `&query=${encodedSearchTerm}` : ""}`,
-        {
-          cache: "no-store",
-        },
-      )
-
-      if (!response.ok) {
-        throw new Error(`오류: ${response.status}`)
+      const res = await fetch("/api/sensors/latest");
+      if (res.ok) {
+        const jsonData = await res.json();
+        setData(jsonData);
+        checkAlerts(jsonData);
       }
-
-      const data = await response.json()
-
-      if (data.error) {
-        throw new Error(data.error)
-      }
-
-      setStocks(data.stocks || [])
-      setPagination(
-        data.pagination || {
-          page: currentPage,
-          pageSize: ITEMS_PER_PAGE,
-          totalItems: data.stocks?.length || 0,
-          totalPages: Math.ceil((data.stocks?.length || 0) / ITEMS_PER_PAGE),
-        },
-      )
-
-      // 주식 데이터를 가져온 후 차트 데이터도 가져오기
-      if (data.stocks && data.stocks.length > 0) {
-        console.log("불러오는 중...")
-        fetchStockCharts(data.stocks.map((stock: Stock) => stock.symbol))
-      }
-
-      setLastUpdated(new Date())
-    } catch (err) {
-      console.error("주식 데이터 로드 실패:", err)
-      setError("주식 데이터를 불러오는데 실패했습니다. 나중에 다시 시도해주세요.")
-      console.log("불러오는 중...")
+    } catch (error) {
+      console.error(error);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }, [currentPage, debouncedSearchTerm])
+  };
 
-  // 주식 차트 데이터를 순차적으로 가져오기 함수
-  const fetchStockCharts = useCallback(async (symbols: string[]) => {
-    if (!symbols || symbols.length === 0) return
+  const checkAlerts = (sensorData: SensorData) => {
+    const now = Date.now();
+    const COOLDOWN = 60000; 
 
-    setRefreshing(true)
-    setRefreshProgress(0)
-
-    try {
-      // 심볼 배열을 20개 단위로 나누기 (API 제한)
-      const MAX_SYMBOLS_PER_REQUEST = 20
-      const symbolChunks = chunkArray(symbols, MAX_SYMBOLS_PER_REQUEST)
-
-      // 차트 데이터를 심볼별로 맵으로 변환
-      const chartMap: Record<string, StockChartData> = {}
-
-      // 순차적으로 각 청크 처리
-      for (let i = 0; i < symbolChunks.length; i++) {
-        const chunk = symbolChunks[i]
-
-        try {
-          const response = await fetch("/api/stocks/latest-charts", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              symbols: chunk,
-              timeframe: "1일", // 메인 페이지에서는 1일 데이터 사용
-            }),
-            cache: "no-store",
-          })
-
-          if (!response.ok) {
-            const errorText = await response.text()
-            throw new Error(`차트 요청 오류: ${response.status} - ${errorText}`)
-          }
-
-          const data = await response.json()
-
-          if (data.error) {
-            throw new Error(data.error)
-          }
-
-          // 결과를 차트 맵에 추가
-          if (data.charts && Array.isArray(data.charts)) {
-            data.charts.forEach((chartData: StockChartData) => {
-              chartMap[chartData.symbol] = chartData
-            })
-          }
-
-          // 진행 상황 업데이트
-          const progress = Math.round(((i + 1) / symbolChunks.length) * 100)
-          setRefreshProgress(progress)
-
-          // 각 청크 처리 후 상태 업데이트
-          setStockCharts(chartMap)
-
-          // 주식 가격 데이터 업데이트
-          setStocks((prevStocks) =>
-            prevStocks.map((stock) => {
-              const chartData = chartMap[stock.symbol]
-              if (chartData && chartData.latestPrice) {
-                return {
-                  ...stock,
-                  regularMarketPrice: chartData.latestPrice,
-                  regularMarketChange: chartData.priceChange,
-                  regularMarketChangePercent: chartData.percentChange,
-                }
-              }
-              return stock
-            }),
-          )
-
-          // 마지막 업데이트 시간 갱신
-          setLastUpdated(new Date())
-
-          console.log(`청크 ${i + 1}/${symbolChunks.length} 처리 완료 (${chunk.length}개 종목)`)
-
-          // 각 청크 사이에 약간의 지연 추가 (API 부하 방지)
-          if (i < symbolChunks.length - 1) {
-            await new Promise((resolve) => setTimeout(resolve, 300))
-          }
-        } catch (chunkError) {
-          console.error(`청크 ${i + 1}/${symbolChunks.length} 처리 중 오류 (${chunk.length}개 심볼):`, chunkError)
-          // 개별 청크 오류는 전체 프로세스를 중단하지 않음
-        }
-      }
-
-      console.log(`총 ${symbols.length}개 종목의 차트 데이터 업데이트 완료`)
-    } catch (err: any) {
-      console.error("차트 데이터 업데이트 실패:", err)
-    } finally {
-      setRefreshing(false)
-      setRefreshProgress(100)
-      // 잠시 후 프로그레스 바 숨기기
-      setTimeout(() => setRefreshProgress(0), 1000)
+    // 긴급 알람만 토스트 띄우기
+    if (sensorData.alert_level === "critical") {
+        if (lastAlertTime.current["sys"] && now - lastAlertTime.current["sys"] < COOLDOWN) return;
+        
+        const newAlert: AlertLog = { 
+            id: now, 
+            type: "system", 
+            message: sensorData.system_message || "시스템 경고", 
+            timestamp: new Date().toLocaleTimeString() 
+        };
+        setAlerts((prev) => [newAlert, ...prev]);
+        lastAlertTime.current["sys"] = now;
+        
+        toast({ 
+            title: "🚨 긴급 조치 필요", 
+            description: sensorData.system_message, 
+            variant: "destructive" 
+        });
     }
-  }, [])
+  };
 
-  // 수동 새로고침 함수
-  const handleRefresh = useCallback(() => {
-    if (stocks.length > 0) {
-      fetchStockCharts(stocks.map((stock) => stock.symbol))
-    } else {
-      fetchStocks()
-    }
-  }, [fetchStocks, fetchStockCharts, stocks])
-
-  // 자동 새로고침 토글 함수
-  const toggleAutoRefresh = useCallback(() => {
-    setAutoRefresh((prev) => !prev)
-  }, [])
-
-  // 페이지 변경 핸들러
-  const handlePageChange = useCallback(
-    (page: number) => {
-      if (page < 1 || page > pagination.totalPages) return
-      setCurrentPage(page)
-    },
-    [pagination.totalPages],
-  )
-
-  // 검색어 또는 페이지 변경 시 데이터 가져오기
   useEffect(() => {
-    fetchStocks()
-  }, [fetchStocks, currentPage, debouncedSearchTerm])
+    fetchSensorData();
+    const interval = setInterval(fetchSensorData, 1000); 
+    return () => clearInterval(interval);
+  }, []);
 
-  // 자동 새로고침 설정
-  useEffect(() => {
-    // 이전 인터벌 정리
-    if (refreshIntervalRef.current) {
-      clearInterval(refreshIntervalRef.current)
-      refreshIntervalRef.current = null
-    }
+  // [수정됨] 모드별 색상 (다크 모드 지원: dark: 접두사 사용)
+  const getModeColor = (mode?: string) => {
+      // Active: 초록색 배경 + 진한 초록 글씨
+      if (mode === "ACTIVE") return "bg-green-100 text-green-900 border-green-500 dark:bg-green-900/40 dark:text-green-100 dark:border-green-700";
+      // Hold: 노란색 배경 + 진한 노랑 글씨
+      if (mode?.includes("HOLD")) return "bg-yellow-100 text-yellow-900 border-yellow-500 dark:bg-yellow-900/40 dark:text-yellow-100 dark:border-yellow-700";
+      // Eco: 회색 배경 + 진한 회색 글씨
+      if (mode === "ECO") return "bg-slate-100 text-slate-900 border-slate-500 dark:bg-slate-800/60 dark:text-slate-200 dark:border-slate-600";
+      return "bg-gray-100 dark:bg-gray-800";
+  };
 
-    // 자동 새로고침이 활성화된 경우에만 인터벌 설정
-    if (autoRefresh && stocks.length > 0) {
-      refreshIntervalRef.current = setInterval(() => {
-        fetchStockCharts(stocks.map((stock) => stock.symbol))
-      }, refreshInterval)
-    }
+  const getModeIcon = (mode?: string) => {
+      if (mode === "ECO") return <Leaf className="h-6 w-6"/>;
+      if (mode?.includes("HOLD")) return <Timer className="h-6 w-6"/>;
+      return <Activity className="h-6 w-6"/>;
+  };
 
-    // 컴포넌트 언마운트 시 인터벌 정리
-    return () => {
-      if (refreshIntervalRef.current) {
-        clearInterval(refreshIntervalRef.current)
-      }
-    }
-  }, [autoRefresh, refreshInterval, fetchStockCharts, stocks])
-
-  // 마지막 업데이트 시간 포맷팅
-  const formatLastUpdated = () => {
-    return lastUpdated.toLocaleTimeString("ko-KR", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    })
-  }
-
-  // 페이지네이션 렌더링 함수
-  const renderPagination = () => {
-    if (pagination.totalPages <= 1) return null
-
-    // 페이지 번호 배열 생성
-    const pageNumbers = []
-
-    // 현재 페이지 주변 페이지 번호만 표시 (최대 5개)
-    const maxPagesToShow = 5
-    let startPage = Math.max(1, currentPage - Math.floor(maxPagesToShow / 2))
-    const endPage = Math.min(pagination.totalPages, startPage + maxPagesToShow - 1)
-
-    // 시작 페이지 조정
-    if (endPage - startPage + 1 < maxPagesToShow) {
-      startPage = Math.max(1, endPage - maxPagesToShow + 1)
-    }
-
-    for (let i = startPage; i <= endPage; i++) {
-      pageNumbers.push(i)
-    }
-
-    return (
-      <Pagination className="mt-6">
-        <PaginationContent>
-          <PaginationItem>
-            <PaginationPrevious
-              href="#"
-              onClick={(e) => {
-                e.preventDefault()
-                handlePageChange(currentPage - 1)
-              }}
-              className={currentPage === 1 ? "pointer-events-none opacity-50" : ""}
-            />
-          </PaginationItem>
-
-          {startPage > 1 && (
-            <>
-              <PaginationItem>
-                <PaginationLink
-                  href="#"
-                  onClick={(e) => {
-                    e.preventDefault()
-                    handlePageChange(1)
-                  }}
-                  isActive={currentPage === 1}
-                >
-                  1
-                </PaginationLink>
-              </PaginationItem>
-              {startPage > 2 && (
-                <PaginationItem>
-                  <PaginationEllipsis />
-                </PaginationItem>
-              )}
-            </>
-          )}
-
-          {pageNumbers.map((page) => (
-            <PaginationItem key={page}>
-              <PaginationLink
-                href="#"
-                onClick={(e) => {
-                  e.preventDefault()
-                  handlePageChange(page)
-                }}
-                isActive={currentPage === page}
-              >
-                {page}
-              </PaginationLink>
-            </PaginationItem>
-          ))}
-
-          {endPage < pagination.totalPages && (
-            <>
-              {endPage < pagination.totalPages - 1 && (
-                <PaginationItem>
-                  <PaginationEllipsis />
-                </PaginationItem>
-              )}
-              <PaginationItem>
-                <PaginationLink
-                  href="#"
-                  onClick={(e) => {
-                    e.preventDefault()
-                    handlePageChange(pagination.totalPages)
-                  }}
-                  isActive={currentPage === pagination.totalPages}
-                >
-                  {pagination.totalPages}
-                </PaginationLink>
-              </PaginationItem>
-            </>
-          )}
-
-          <PaginationItem>
-            <PaginationNext
-              href="#"
-              onClick={(e) => {
-                e.preventDefault()
-                handlePageChange(currentPage + 1)
-              }}
-              className={currentPage === pagination.totalPages ? "pointer-events-none opacity-50" : ""}
-            />
-          </PaginationItem>
-        </PaginationContent>
-      </Pagination>
-    )
-  }
+  if (loading && !data) return <div className="flex h-screen items-center justify-center">Loading System...</div>;
 
   return (
-    <div className="container mx-auto py-6">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-5xl font-bold">주식 트래커</h1>
-        <div className="flex items-center gap-2">
-          <div className="text-sm text-muted-foreground mr-2">마지막 업데이트: {formatLastUpdated()}</div>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={toggleAutoRefresh}
-                  className={autoRefresh ? "bg-green-50 dark:bg-green-950" : ""}
-                >
-                  {autoRefresh ? "자동 갱신 켜짐" : "자동 갱신 꺼짐"}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>{autoRefresh ? "자동 갱신을 끄려면 클릭하세요" : "자동 갱신을 켜려면 클릭하세요"}</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={handleRefresh}
-                  disabled={loading || refreshing}
-                  className="relative"
-                >
-                  <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>수동으로 새로고침</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </div>
-      </div>
-
-      <div className="relative mb-6">
-        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-        <Input
-          type="search"
-          placeholder="종목 코드 또는 회사명으로 검색 (예: 삼성전자, AAPL)"
-          className="pl-8"
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-        />
-      </div>
-
-      {refreshProgress > 0 && (
-        <div className="mb-4">
-          <div className="flex justify-between text-sm mb-1">
-            <span>데이터 갱신 중...</span>
-            <span>{refreshProgress}%</span>
-          </div>
-          <Progress value={refreshProgress} className="h-2" />
-        </div>
-      )}
-
-      {/* 페이지 정보 표시 */}
-      {!loading && stocks.length > 0 && (
-        <div className="flex justify-between items-center mb-4">
-          <div className="text-sm text-muted-foreground">
-            총 {pagination.totalItems}개 종목 중 {(currentPage - 1) * ITEMS_PER_PAGE + 1}-
-            {Math.min(currentPage * ITEMS_PER_PAGE, pagination.totalItems)}개 표시
-          </div>
-          <div className="text-sm">
-            페이지 {currentPage} / {pagination.totalPages}
+    <div className="flex min-h-screen w-full flex-col bg-muted/40 p-4 md:p-8">
+      <div className="flex flex-col gap-6">
+        
+        {/* 헤더 */}
+        <div className="flex items-center justify-between">
+          <h1 className="text-3xl font-bold">IoT Digital Twin System</h1>
+          <div className="flex gap-4">
+             <Badge variant={data?.error ? "destructive" : "outline"} className="h-9 px-4">
+               {data?.error ? "연결 끊김" : "시스템 정상"}
+             </Badge>
+             <Popover>
+               <PopoverTrigger asChild>
+                 <Button variant="outline" size="icon" className="relative">
+                    <Bell className="h-5 w-5"/>
+                    {alerts.length > 0 && <span className="absolute -top-1 -right-1 flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span>}
+                 </Button>
+               </PopoverTrigger>
+               <PopoverContent className="w-80" align="end">
+                 <div className="p-4 border-b"><h4 className="font-medium">알람 로그</h4></div>
+                 <ScrollArea className="h-64">
+                    {alerts.map(a => <div key={a.id} className="p-3 border-b text-sm"><span className="font-medium">{a.message}</span><br/><span className="text-xs text-muted-foreground">{a.timestamp}</span></div>)}
+                 </ScrollArea>
+                 {alerts.length > 0 && (
+                    <div className="p-2 border-t text-center">
+                        <Button variant="ghost" size="sm" onClick={() => setAlerts([])} className="w-full h-8 text-xs">내역 지우기</Button>
+                    </div>
+                 )}
+               </PopoverContent>
+             </Popover>
           </div>
         </div>
-      )}
 
-      {loading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {Array.from({ length: 12 }).map((_, index) => (
-            <Card key={index} className="h-full">
-              <CardContent className="pt-6">
-                <Skeleton className="h-6 w-20 mb-2" />
-                <Skeleton className="h-4 w-40 mb-4" />
-              </CardContent>
-              <CardFooter className="pt-0">
-                <div className="w-full flex justify-between items-center">
-                  <Skeleton className="h-8 w-24" />
-                  <Skeleton className="h-4 w-20" />
+        {/* --- [시스템 상태 배너] --- */}
+        <Card className={`border-l-8 shadow-sm transition-colors duration-300 ${getModeColor(data?.system_mode)}`}>
+            <CardContent className="flex items-center justify-between p-4">
+                <div>
+                    <h2 className="text-xl font-bold flex items-center gap-2">
+                        {getModeIcon(data?.system_mode)}
+                        Current Mode: {data?.system_mode || "Initializing..."}
+                    </h2>
+                    <p className="text-sm mt-1 font-bold opacity-90">
+                        {data?.system_message || "시스템 데이터를 수신 중입니다."}
+                    </p>
                 </div>
-              </CardFooter>
+                <div className="text-4xl opacity-30">
+                    {data?.system_mode === "ECO" ? "🌱" : "⚡"}
+                </div>
+            </CardContent>
+        </Card>
+
+        {/* 메인 그리드 */}
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            
+            {/* 1. 온도 카드 */}
+            <Card className={data?.temperature && data.temperature >= 28 ? "border-red-500 bg-red-50 dark:bg-red-950/30" : ""}>
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                    <CardTitle className="text-sm font-medium">실내 온도</CardTitle>
+                    <Thermometer className={`h-4 w-4 ${data?.temperature && data.temperature >= 28 ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}/>
+                </CardHeader>
+                <CardContent>
+                    <div className="text-2xl font-bold">{data?.temperature?.toFixed(1) ?? "--"}°C</div>
+                    <p className={`text-xs mt-1 ${data?.temperature && data.temperature >= 28 ? "text-red-600 dark:text-red-300 font-bold" : "text-muted-foreground"}`}>
+                        {data?.temperature && data.temperature >= 28 ? "⚠️ 에어컨 가동 필요" : "적정 온도"}
+                    </p>
+                </CardContent>
             </Card>
-          ))}
-        </div>
-      ) : error ? (
-        <div className="text-center py-10">
-          <p className="text-red-500">{error}</p>
-          <Button variant="outline" className="mt-4" onClick={() => setSearchTerm("")}>
-            다시 시도
-          </Button>
-        </div>
-      ) : (
-        <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            {stocks.map((stock) => {
-              const chartData = stockCharts[stock.symbol]
-              const priceChange = chartData ? chartData.priceChange : stock.regularMarketChange
-              const percentChange = chartData ? chartData.percentChange : stock.regularMarketChangePercent
-              const isPositive = priceChange >= 0
 
-              return (
-                <Link href={`/stock/${stock.symbol}`} key={stock.symbol}>
-                  <Card className={`h-full hover:shadow-md transition-shadow ${refreshing ? "animate-pulse" : ""}`}>
-                    <CardContent className="pt-6">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <h2 className="text-xl font-bold">{stock.symbol}</h2>
-                          <p className="text-sm text-muted-foreground truncate max-w-[200px]">
-                            {stock.shortName || stock.longName}
-                          </p>
+            {/* 2. 습도 카드 */}
+            <Card className={data?.humidity && data.humidity >= 50 ? "border-blue-500 bg-blue-50 dark:bg-blue-950/30" : ""}>
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                    <CardTitle className="text-sm font-medium">실내 습도</CardTitle>
+                    <Droplets className="h-4 w-4 text-blue-500"/>
+                </CardHeader>
+                <CardContent>
+                    <div className="text-2xl font-bold">{data?.humidity?.toFixed(1) ?? "--"}%</div>
+                    <p className={`text-xs mt-1 ${data?.humidity && data.humidity >= 50 ? "text-blue-600 dark:text-blue-300 font-bold" : "text-muted-foreground"}`}>
+                        {data?.humidity && data.humidity >= 50 ? "💧 제습기 가동 필요" : "쾌적한 습도"}
+                    </p>
+                </CardContent>
+            </Card>
+
+            {/* 3. 보안(PIR) 카드 */}
+            <Card className={data?.motion === 1 ? "border-orange-500 bg-orange-50 dark:bg-orange-950/30" : ""}>
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                    <CardTitle className="text-sm font-medium">재실 감지 (PIR)</CardTitle>
+                    <Activity className={`h-4 w-4 ${data?.motion === 1 ? "text-orange-600 dark:text-orange-400" : "text-green-500"}`}/>
+                </CardHeader>
+                <CardContent>
+                    <div className={`text-2xl font-bold ${data?.motion === 1 ? "text-orange-600 dark:text-orange-300" : "text-green-600 dark:text-green-400"}`}>
+                        {data?.motion === 1 ? "감지됨" : "없음"}
+                    </div>
+                </CardContent>
+            </Card>
+
+            {/* 4. 전력 모니터링 (고전력 시 빨간색 강조) */}
+            <Card className={`col-span-full lg:col-span-3 ${data?.power && data.power >= 500 ? "border-red-500 shadow-md bg-red-50 dark:bg-red-950/30" : "border-yellow-500"}`}>
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                    <CardTitle className="text-sm font-medium">실시간 전력 소비량</CardTitle>
+                    <Zap className={`h-4 w-4 ${data?.power && data.power >= 500 ? "text-red-500 animate-pulse" : "text-yellow-500"}`}/>
+                </CardHeader>
+                <CardContent className="grid gap-4 md:grid-cols-2">
+                    <div className="p-4 bg-white/50 dark:bg-black/20 rounded-lg">
+                        <span className="text-sm text-muted-foreground">Power (W)</span>
+                        <div className={`text-4xl font-bold mt-1 ${data?.power && data.power >= 500 ? "text-red-600 dark:text-red-400" : "text-yellow-600 dark:text-yellow-400"}`}>
+                            {data?.power?.toFixed(0) ?? 0} W
                         </div>
-                        <div className={`flex items-center ${isPositive ? "text-green-600" : "text-red-600"}`}>
-                          {isPositive ? <ArrowUp className="h-4 w-4 mr-1" /> : <ArrowDown className="h-4 w-4 mr-1" />}
-                          <span className="font-medium">
-                            {percentChange >= 0 ? "+" : ""}
-                            {percentChange.toFixed(2)}%
-                          </span>
-                        </div>
-                      </div>
-                    </CardContent>
-                    <CardFooter className="pt-0">
-                      <div className="w-full flex justify-between items-center">
-                        <span className="text-2xl font-bold">
-                          {stock.isKoreanStock
-                            ? formatKoreanCurrency(stock.regularMarketPrice)
-                            : formatUSDCurrency(stock.regularMarketPrice)}
-                          <span className="text-xs ml-1 text-gray-500">/ 주</span>
-                        </span>
-                        <span className="text-sm text-muted-foreground">
-                          거래량: {(stock.regularMarketVolume / 1000000).toFixed(1)}백만
-                        </span>
-                      </div>
-                    </CardFooter>
-                  </Card>
-                </Link>
-              )
-            })}
+                    </div>
+                    <div className="p-4 bg-white/50 dark:bg-black/20 rounded-lg">
+                        <span className="text-sm text-muted-foreground">Current (A)</span>
+                        <div className="text-4xl font-bold">{data?.current?.toFixed(2) ?? 0.00} A</div>
+                    </div>
+                </CardContent>
+            </Card>
 
-            {stocks.length === 0 && (
-              <div className="col-span-full text-center py-10">
-                <p className="text-muted-foreground">검색 결과가 없습니다.</p>
-                <Button variant="outline" className="mt-4" onClick={() => setSearchTerm("")}>
-                  검색 초기화
-                </Button>
-              </div>
-            )}
-          </div>
-
-          {/* 페이지네이션 컴포넌트 */}
-          {renderPagination()}
-        </>
-      )}
+            {/* 5. CCTV & AI 감시 */}
+            <Card className="col-span-full lg:col-span-3 border-l-4 border-l-purple-500 shadow-md">
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                    <CardTitle className="text-lg font-bold flex items-center gap-2">
+                        <Camera className="h-5 w-5 text-purple-600 dark:text-purple-400"/> 실시간 현장 (AI Analysis)
+                    </CardTitle>
+                    <div className="bg-purple-100 dark:bg-purple-900/40 px-3 py-1 rounded-full text-purple-700 dark:text-purple-200 font-bold text-sm flex gap-2">
+                        <Users className="h-4 w-4"/> AI 감지 인원: {data?.people_count ?? 0}명
+                    </div>
+                </CardHeader>
+                <CardContent>
+                    <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden flex items-center justify-center">
+                        <img 
+                           src="http://192.168.45.95:5000/video_feed"
+                           alt="CCTV Loading..." 
+                           className="w-full h-full object-contain"
+                           onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                        />
+                        <div className="absolute top-2 right-2 bg-red-600 text-white text-[10px] px-2 py-0.5 rounded animate-pulse">LIVE</div>
+                    </div>
+                </CardContent>
+            </Card>
+        </div>
+        
+        <div className="flex justify-center mt-6">
+            <Button asChild size="lg">
+                <Link href="/sensors/details"><BarChart3 className="mr-2 h-4 w-4"/> 상세 이력 보기</Link>
+            </Button>
+        </div>
+      </div>
     </div>
-  )
+  );
 }

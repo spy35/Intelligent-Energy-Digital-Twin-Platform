@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 // 💡 중요: <Tinker_Edge_R_IP> 부분을 실제 Tinker Edge R의 IP 주소로 변경하세요.
-const SENSOR_API_URL = "http://<Tinker_Edge_R_IP>:5000/api/sensors";
+const SENSOR_API_URL = "http://192.168.45.95:5000/api/sensors";
 
 async function handler(req: Request) {
   const url = new URL(req.url);
