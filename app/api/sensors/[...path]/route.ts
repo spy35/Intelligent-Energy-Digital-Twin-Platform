@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
-// 💡 중요: <Tinker_Edge_R_IP> 부분을 실제 Tinker Edge R의 IP 주소로 변경하세요.
-const SENSOR_API_URL = "http://192.168.45.95:5000/api/sensors";
+// 1. 여기에 본인의 Ngrok 주소를 정확히 넣어주세요. (뒤에 /api/sensors 유지)
+const SENSOR_API_URL = "https://teensy-gainable-shaunda.ngrok-free.dev/api/sensors";
 
 async function handler(req: Request) {
   const url = new URL(req.url);
@@ -10,13 +10,19 @@ async function handler(req: Request) {
 
   try {
     const response = await fetch(`${SENSOR_API_URL}${path}${searchParams}`, {
-      // 실시간 데이터를 위해 캐시 사용 안함
       cache: "no-store",
+      // 2. 이 헤더 부분이 경고창을 뚫어주는 핵심 열쇠입니다. (app.py 수정 필요 없음)
+      headers: {
+        "ngrok-skip-browser-warning": "true",
+        "Content-Type": "application/json",
+      },
     });
 
     if (!response.ok) {
-      const errData = await response.json();
-      throw new Error(errData.error || `Sensor API fetch failed: ${response.statusText}`);
+        // 에러 발생 시 로그를 출력해 원인을 봅니다.
+        const errorText = await response.text();
+        console.error("Ngrok Error:", errorText); 
+        throw new Error(`API fetch failed: ${response.status} ${response.statusText}`);
     }
 
     const data = await response.json();
