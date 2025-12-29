@@ -13,18 +13,18 @@ export default function DigitalTwinPage() {
   });
 
   // 센서 데이터를 가져와서 유니티로 보내는 로직 (디지털 트윈 연동)
-  // 예시: 5초마다 센서 데이터를 갱신하여 유니티 내 함수 호출
   useEffect(() => {
     if (!isLoaded) return;
 
     const interval = setInterval(async () => {
       try {
-        // 기존에 만드신 API 호출
-        const res = await fetch('/api/sensors/current'); // API 경로는 실제에 맞게 수정
+        // ✅ [수정됨] API 경로를 app.py와 일치시킴 (/api/sensors/latest)
+        const res = await fetch('/api/sensors/latest'); 
+        
         if(res.ok) {
             const data = await res.json();
             // Unity 내의 'SensorManager'라는 오브젝트의 'UpdateSensorData' 함수로 JSON 문자열 전달
-            // sendMessage("GameObjectName", "MethodName", parameter);
+            // 주의: Unity Hierarchy 창에서 이 스크립트가 붙은 오브젝트 이름이 "SensorManager"여야 함
             sendMessage("SensorManager", "UpdateSensorData", JSON.stringify(data));
         }
       } catch (e) {
