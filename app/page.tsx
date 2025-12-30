@@ -284,7 +284,7 @@ export default function Dashboard() {
                 <CardContent>
                     <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden flex items-center justify-center">
                         <img 
-                           src="https://teensy-gainable-shaunda.ngrok-free.dev/video_feed"
+                           src="/api/video"
                            alt="CCTV Loading..." 
                            className="w-full h-full object-contain"
                            onError={(e) => { e.currentTarget.style.display = 'none'; }}
