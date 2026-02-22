@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(req: NextRequest) {
   // 1. 여기에 카메라용 Ngrok 주소를 넣으세요 (뒤에 /video_feed 유지)
-  const CAMERA_URL = "https://teensy-gainable-shaunda.ngrok-free.dev/video_feed"; 
+  const CAMERA_URL = "http://192.168.0.115:5000/video_feed"; 
 
   try {
     // 2. Ngrok 서버로 영상을 요청합니다. (경고 무시 헤더 추가)

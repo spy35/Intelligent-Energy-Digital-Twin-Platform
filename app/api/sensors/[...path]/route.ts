@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 // 1. 여기에 본인의 Ngrok 주소를 정확히 넣어주세요. (뒤에 /api/sensors 유지)
-const SENSOR_API_URL = "https://teensy-gainable-shaunda.ngrok-free.dev/api/sensors";
+const SENSOR_API_URL = "http://192.168.0.115:5000/api/sensors";
 
 async function handler(req: Request) {
   const url = new URL(req.url);
